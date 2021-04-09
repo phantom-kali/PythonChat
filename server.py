@@ -32,6 +32,7 @@ def handle(client):
             client_name = client_names[index]
             client_names.remove(client_name)
             broadcast(f'\n {client_name} left the chat!'.encode(format))
+            print(f"{client_name} disconnected")
             break
 
 
@@ -47,7 +48,7 @@ def receive():
 
         print(f'client name of {address} is {client_name}')
         client.send('successfully connected to the server'.encode(format))
-        broadcast(f'\n {client_name} joined the chat!'.encode(format))
+        broadcast(f'{client_name} joined the chat!'.encode(format))
 
         thread = threading.Thread(target=handle, args=(client,))
         thread.start()
@@ -57,9 +58,6 @@ def receive():
         else:
             print(f"\n {threading.activeCount() - 1} people are connected")
             broadcast(f"{client_names} are in the chat".encode(format))
-            broadcast(chats)
-            print(chats)
-
-
+    
 print('server is listening...')
 receive()
