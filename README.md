@@ -62,15 +62,9 @@ Usage:
 
     Starting the Server:
         Run server.py to start the server.
-        ```bash
-        python server.py
-        ```
 
     Connecting Clients:
         Run multiple instances of client.py to simulate multiple clients connecting to the server.
-        ```bash
-        python client.py
-        ```
 
     Chatting:
         Clients can send and receive messages in the chat.
