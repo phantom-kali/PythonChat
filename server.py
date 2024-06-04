@@ -1,63 +1,120 @@
 import socket
 import threading
+import sqlite3
+import base64
 
-host = '127.0.0.1'
-port = 55555
-format = 'ascii'
+class ChatServer:
+    def __init__(self, host='127.0.0.1', port=5000):
+        self.host = host
+        self.port = port
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((self.host, self.port))
+        self.server_socket.listen(5)
+        self.clients = {}
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((host, port))
-server.listen()
+        self.init_db()
 
-clients = []
-client_names = []
-chats = []
+    def init_db(self):
+        self.conn = sqlite3.connect('chat_server.db')
+        self.cursor = self.conn.cursor()
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                             (username TEXT PRIMARY KEY,
+                             password TEXT)''')
+        self.conn.commit()
 
-
-def broadcast(message):
-    for client in clients:
-        client.send(message)
-
-
-def handle(client):
-    while True:
+    def register_user(self, username, password):
+        conn = sqlite3.connect('chat_server.db')
+        cursor = conn.cursor()
         try:
-            message = client.recv(1024)
-            chats.append(message)
-            broadcast(message)
-        except:
-            index = clients.index(client)
-            clients.remove(client)
-            client.close()
-            client_name = client_names[index]
-            client_names.remove(client_name)
-            broadcast(f'\n {client_name} left the chat!'.encode(format))
-            print(f"{client_name} disconnected")
-            break
+            cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+        finally:
+            conn.close()
 
+    def verify_user(self, username, password):
+        conn = sqlite3.connect('chat_server.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
 
-def receive():
-    while True:
-        client, address = server.accept()
-        print(f'New Connection! {address}')
+    def broadcast(self, message, sender_socket):
+        for client_socket in self.clients.values():
+            if client_socket != sender_socket:
+                try:
+                    encrypted_message = self.encrypt_message(message)
+                    client_socket.send(encrypted_message)
+                except Exception as e:
+                    print(f"Failed to send message to {client_socket}: {e}")
 
-        client.send("name".encode(format))
-        client_name = client.recv(1024).decode(format)
-        client_names.append(client_name)
-        clients.append(client)
+    def encrypt_message(self, message):
+        message_bytes = message.encode('utf-8')
+        base64_bytes = base64.b64encode(message_bytes)
+        return base64_bytes
 
-        print(f'client name of {address} is {client_name}')
-        client.send('successfully connected to the server'.encode(format))
-        broadcast(f'{client_name} joined the chat!'.encode(format))
+    def decrypt_message(self, encrypted_message):
+        base64_bytes = encrypted_message
+        message_bytes = base64.b64decode(base64_bytes)
+        return message_bytes.decode('utf-8')
 
-        thread = threading.Thread(target=handle, args=(client,))
-        thread.start()
+    def handle_client(self, client_socket):
+        try:
+            while True:
+                encrypted_message = client_socket.recv(1024)
+                if not encrypted_message:
+                    break
 
-        if threading.activeCount() - 1 == 1:
-            client.send(f'\n Welcome {client_name}, You can start a chat when other people connect'.encode(format))
-        else:
-            print(f"\n {threading.activeCount() - 1} people are connected")
-            broadcast(f"{client_names} are in the chat".encode(format))
-    
-print('server is listening...')
-receive()
+                message = self.decrypt_message(encrypted_message)
+                if message.startswith("register|"):
+                    _, username, password = message.split("|")
+                    if self.register_user(username, password):
+                        client_socket.send(self.encrypt_message("register|success"))
+                    else:
+                        client_socket.send(self.encrypt_message("register|failure"))
+                elif message.startswith("login|"):
+                    _, username, password = message.split("|")
+                    if self.verify_user(username, password):
+                        if username in self.clients:
+                            client_socket.send(self.encrypt_message("login|success"))
+                            self.update_users()
+                        else:
+                            self.clients[username] = client_socket
+                            client_socket.send(self.encrypt_message("login|success"))
+                            self.update_users()
+                    else:
+                        client_socket.send(self.encrypt_message("login|failure"))
+                else:
+                    self.broadcast(message, client_socket)
+        except Exception as e:
+            print(f"Client handling error: {e}")
+        finally:
+            for username, socket in self.clients.items():
+                if socket == client_socket:
+                    del self.clients[username]
+                    break
+            client_socket.close()
+            self.update_users()
+
+    def update_users(self):
+        user_list = "update_users|" + ",".join(self.clients.keys())
+        for client_socket in self.clients.values():
+            try:
+                encrypted_message = self.encrypt_message(user_list)
+                client_socket.send(encrypted_message)
+            except Exception as e:
+                print(f"Failed to update user list: {e}")
+
+    def start(self):
+        print("Server started")
+        while True:
+            client_socket, client_address = self.server_socket.accept()
+            print(f"Connection from {client_address}")
+            threading.Thread(target=self.handle_client, args=(client_socket,)).start()
+
+if __name__ == "__main__":
+    server = ChatServer()
+    server.start()
